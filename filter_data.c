@@ -62,7 +62,7 @@ static const char* _next_separator(const char* str, char separator, int* eol)
     return pos;
 }
 
-struct data* read_data(const char* filename, unsigned int xindex, unsigned int yindex, struct filter** filterlist)
+struct data* read_data(const char* filename, unsigned int xindex, unsigned int yindex, char separator, struct filter** filterlist)
 {
     FILE* file = fopen(filename, "r");
     if(!file)
@@ -71,7 +71,6 @@ struct data* read_data(const char* filename, unsigned int xindex, unsigned int y
         return NULL;
     }
     char buf[BUFSIZE];
-    char separator = ',';
     struct data* data = malloc(sizeof(*data));
     data->capacity = 1024;
     data->data = malloc(sizeof(*data->data) * data->capacity);
@@ -228,6 +227,8 @@ int main(int argc, char** argv)
     size_t numfilter = 0;
     struct filter** filterlist = malloc(1 * sizeof(*filterlist));
 
+    char separator = ',';
+
     int i = 4;
     while(i < argc)
     {
@@ -315,13 +316,23 @@ int main(int argc, char** argv)
             ++numfilter;
             ++i;
         }
+        if(strcmp(argv[i], "--separator") == 0)
+        {
+            if(i + 1 >= argc)
+            {
+                fprintf(stderr, "%s\n", "--separator: argument required");
+                return 0;
+            }
+            separator = argv[i + 1][0];
+            ++i;
+        }
         ++i;
     }
 
     /* terminate filterlist */
     *(filterlist + numfilter) = NULL;
 
-    struct data* data = read_data(filename, xindex, yindex, filterlist);
+    struct data* data = read_data(filename, xindex, yindex, separator, filterlist);
     for(size_t i = 0; i < data->length; ++i)
     {
         printf("%f : %f\n", (data->data + i)->x, (data->data + i)->y);
