@@ -28,8 +28,8 @@ struct data {
     size_t capacity;
 };
 
-typedef int (*filter_func_1_arg)(struct xydatum*, void*);
-typedef int (*filter_func_2_arg)(struct xydatum*, void*, void*);
+typedef int (*filter_func_1_arg)(struct xydatum*, size_t index, void*);
+typedef int (*filter_func_2_arg)(struct xydatum*, size_t index, void*, void*);
 
 struct filter {
     union {
@@ -82,14 +82,14 @@ void destroy_filterlist(struct filterlist* filterlist)
     free(filterlist);
 }
 
-int _apply_filter(struct xydatum* datum, struct filter* filter)
+int _apply_filter(struct xydatum* datum, size_t index, struct filter* filter)
 {
     switch(filter->type)
     {
         case FILTER_1_ARG:
-            return filter->func_1_arg(datum, filter->arg1);
+            return filter->func_1_arg(datum, index, filter->arg1);
         case FILTER_2_ARG:
-            return filter->func_2_arg(datum, filter->arg1, filter->arg2);
+            return filter->func_2_arg(datum, index, filter->arg1, filter->arg2);
     }
     return 0;
 }
@@ -134,7 +134,7 @@ struct data* read_data(const char* filename, unsigned int xindex, unsigned int y
             break;
         }
         const char* str = buf;
-        unsigned int index = 0;
+        size_t index = 0;
         if(data->length == data->capacity)
         {
             data->capacity *= 2;
@@ -159,7 +159,7 @@ struct data* read_data(const char* filename, unsigned int xindex, unsigned int y
             {
                 for(size_t i = 0; i < filterlist->size; ++i)
                 {
-                    advance = advance && _apply_filter(datum, filterlist->filter[i]);
+                    advance = advance && _apply_filter(datum, index, filterlist->filter[i]);
                 }
                 break;
             }
@@ -175,20 +175,23 @@ struct data* read_data(const char* filename, unsigned int xindex, unsigned int y
     return data;
 }
 
-int _scale_x(struct xydatum* datum, void* factor)
+int _scale_x(struct xydatum* datum, size_t index, void* factor)
 {
+    (void)index;
     datum->x *= *((double*)factor);
     return 1;
 }
 
-int _scale_y(struct xydatum* datum, void* factor)
+int _scale_y(struct xydatum* datum, size_t index, void* factor)
 {
+    (void)index;
     datum->y.d *= *((double*)factor);
     return 1;
 }
 
-int _x_min(struct xydatum* datum, void* min)
+int _x_min(struct xydatum* datum, size_t index, void* min)
 {
+    (void)index;
     if(datum->x < *((double*)min))
     {
         return 0;
@@ -199,8 +202,9 @@ int _x_min(struct xydatum* datum, void* min)
     }
 }
 
-int _x_max(struct xydatum* datum, void* min)
+int _x_max(struct xydatum* datum, size_t index, void* min)
 {
+    (void)index;
     if(datum->x > *((double*)min))
     {
         return 0;
@@ -211,38 +215,33 @@ int _x_max(struct xydatum* datum, void* min)
     }
 }
 
-int _shift_x(struct xydatum* datum, void* shift)
+int _shift_x(struct xydatum* datum, size_t index, void* shift)
 {
+    (void)index;
     datum->x += *((double*)shift);
     return 1;
 }
 
-int _shift_y(struct xydatum* datum, void* shift)
+int _shift_y(struct xydatum* datum, size_t index, void* shift)
 {
+    (void)index;
     datum->y.d += *((double*)shift);
     return 1;
 }
 
-int _every_nth(struct xydatum* datum, void* nthp, void* countv)
+int _every_nth(struct xydatum* datum, size_t index, void* nthp)
 {
+    (void)index;
     (void)datum;
     int nth = *((int*)nthp);
-    if(nth == 0)
+    if((index % nth) == 0)
     {
         return 1;
     }
-    int* countp = countv;
-    int ret = 0;
-    if(*countp == nth - 1)
-    {
-        ret = 1;
-        *countp = 0;
-    }
     else
     {
-        ++(*countp);
+        return 0;
     }
-    return ret;
 }
 
 struct filter* _create_filter_1_arg(filter_func_1_arg func, void* arg)
@@ -389,7 +388,7 @@ int main(int argc, char** argv)
             *arg = atoi(argv[i + 1]);
             int* count = malloc(sizeof(*arg));
             *count = 0;
-            struct filter* filter = _create_filter_2_arg(_every_nth, arg, count);
+            struct filter* filter = _create_filter_1_arg(_every_nth, arg);
             _append_filter(filterlist, filter);
             ++i;
         }
