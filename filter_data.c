@@ -1,6 +1,7 @@
+#include <math.h>
 #include <stdio.h>
-#include <string.h>
 #include <stdlib.h>
+#include <string.h>
 
 #define BUFSIZE 1024
 
@@ -20,6 +21,7 @@ struct yvalue {
 struct xydatum {
     double x;
     struct yvalue y;
+    int deleted;
 };
 
 struct data {
@@ -111,6 +113,7 @@ static void _next_separator(const char* str, const char* separator, const char**
         if((!*pos) || (*pos == '\n'))
         {
             *eol = 1;
+            *startpos = pos; // used as terminator for string parsing
             break;
         }
         while(*pos && *seppos && (*pos == *seppos))
@@ -149,7 +152,7 @@ static double _str_to_number(const char* str, const char* endptr)
     return num;
 }
 
-static struct data* read_data(const char* filename, unsigned int xindex, unsigned int yindex, const char* separator, struct filterlist* filterlist)
+static struct data* read_data(const char* filename, size_t skip, unsigned int xindex, unsigned int yindex, const char* separator, struct filterlist* filterlist)
 {
     FILE* file = fopen(filename, "r");
     if(!file)
@@ -162,9 +165,15 @@ static struct data* read_data(const char* filename, unsigned int xindex, unsigne
     data->capacity = 1024;
     data->data = malloc(sizeof(*data->data) * data->capacity);
     data->length = 0;
+    size_t numlines = 0;
     while(1) /* iterate lines */
     {
         const char* s = fgets(buf, BUFSIZE, file);
+        ++numlines;
+        if((numlines - 1) < skip)
+        {
+            continue;
+        }
         if(!s)
         {
             break;
@@ -177,6 +186,7 @@ static struct data* read_data(const char* filename, unsigned int xindex, unsigne
             data->data = realloc(data->data, sizeof(*data->data) * data->capacity);
         }
         struct xydatum* datum = data->data + data->length;
+        datum->deleted = 0;
         int advance = 1;
         while(1) /* parse line */
         {
@@ -331,8 +341,14 @@ static void _usage(void)
     puts("    <xindex> (number)                    index of x data");
     puts("    <yindex> (number)                    index if y data");
     puts("    --y-is-integer                       y values are integers, not real numbers");
-    //puts("    -s,--separator (default \",\")         input data separator");
-    //puts("    -S,--print-separator (default \" \")   output data separator");
+    puts("    -s,--separator (default \",\")         input data separator");
+    puts("    -S,--print-separator (default \" \")   output data separator");
+    puts("    -k,--skip                            number of initial lines (header) to skip");
+    puts("    -r,--remove-redundant-points         remove points that add lines to output data, but not numerically (e.g. 42.2 and 42.2 as x coordinates for consecutive points)");
+    puts("    --sample                             take samples of the input data. Use with --sample-start and --sample-interval");
+    puts("    --sample                             take samples of the input data. Use with --sample-start and --sample-interval");
+    puts("    --sample-start                       start of sampling (x-coordinate)");
+    puts("    --sample-interval                    interval of sampling (x-coordinate)");
     //puts("    -f,--filter                          filter data (remove redundant points)");
     //puts("    -n,--every-nth (default 1)           only keep every nth point");
     //puts("    --as-string                          don't do any numerical processing on y");
@@ -345,7 +361,7 @@ static void _usage(void)
     //puts("    --y-is-multibit                      map binary data (e.g. 101) to decimal (e.g. 5) (implies --as-string)");
     //puts("    --ymin (default 0)                   minimum value for y map range");
     //puts("    --ymax (default 0)                   maximum value for y map range");
-    //puts("    --xprecision (default 1e-3)          decimal digits for x data");
+    puts("    --xprecision                         decimal digits for x data");
     //puts("    --yprecision (default 1e-3)          decimal digits for y data");
     //puts("    --xshift (default 0)                 shift x values");
     //puts("    --x-relative                         output relative x values");
@@ -362,6 +378,93 @@ static int _arg_is(const char* arg, const char* short_arg, const char* long_arg)
         return 1;
     }
     return 0;
+}
+
+static int _has_arg(int argc, char** argv, const char* short_arg, const char* long_arg)
+{
+    for(int i = 1; i < argc; ++i)
+    {
+        if(_arg_is(argv[i], short_arg, long_arg))
+        {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static size_t _get_skiplines(int argc, char** argv)
+{
+    for(int i = 1; i < argc; ++i)
+    {
+        if(_arg_is(argv[i], "-k", "--skip"))
+        {
+            if(i < argc - 1)
+            {
+                return atoi(argv[i + 1]);
+            }
+        }
+    }
+    return 0;
+}
+
+static int _get_xdecimals(int argc, char** argv)
+{
+    for(int i = 1; i < argc; ++i)
+    {
+        if(_arg_is(argv[i], NULL, "--xprecision"))
+        {
+            if(i < argc - 1)
+            {
+                return atoi(argv[i + 1]);
+            }
+        }
+    }
+    return 16;
+}
+
+static int _get_ydecimals(int argc, char** argv)
+{
+    for(int i = 1; i < argc; ++i)
+    {
+        if(_arg_is(argv[i], NULL, "--yprecision"))
+        {
+            if(i < argc - 1)
+            {
+                return atoi(argv[i + 1]);
+            }
+        }
+    }
+    return 16;
+}
+
+static double _get_sample_start(int argc, char** argv)
+{
+    for(int i = 1; i < argc; ++i)
+    {
+        if(_arg_is(argv[i], NULL, "--sample-start"))
+        {
+            if(i < argc - 1)
+            {
+                return atof(argv[i + 1]);
+            }
+        }
+    }
+    return 0.0;
+}
+
+static double _get_sample_interval(int argc, char** argv)
+{
+    for(int i = 1; i < argc; ++i)
+    {
+        if(_arg_is(argv[i], NULL, "--sample-interval"))
+        {
+            if(i < argc - 1)
+            {
+                return atof(argv[i + 1]);
+            }
+        }
+    }
+    return 0.0;
 }
 
 static char* _get_separator(int argc, char** argv, const char* default_sep)
@@ -392,6 +495,87 @@ static char* _get_print_separator(int argc, char** argv, const char* default_sep
         }
     }
     return strdup(default_sep);
+}
+
+static int _is_equal(double x1, double x2, double precision)
+{
+    return fabs(x1 - x2) < precision;
+}
+
+static void _remove_redundant_points(struct data* data, int xdecimals, int ydecimals)
+{
+    // x-filter
+    double xprecision = pow(10, -xdecimals);
+    // find redundant points and mark the as deleted
+    struct xydatum* lastdatum = data->data + 0;
+    for(size_t i = 1; i < data->length; ++i)
+    {
+        struct xydatum* datum = data->data + i;
+        if(_is_equal(datum->x, lastdatum->x, xprecision))
+        {
+            datum->deleted = 1;
+        }
+        else
+        {
+            lastdatum = datum;
+        }
+    }
+
+    // y-filter
+    double yprecision = pow(10, -ydecimals);
+    // find redundant points and mark the as deleted
+    lastdatum = data->data + 0;
+    for(size_t i = 1; i < data->length; ++i)
+    {
+        struct xydatum* datum = data->data + i;
+        int advance = 1;
+        switch(lastdatum->y.type)
+        {
+            case REAL:
+                advance = !_is_equal(datum->y.d, lastdatum->y.d, yprecision);
+                break;
+            case INTEGER:
+                advance = !(datum->y.i == lastdatum->y.i);
+                break;
+            case STRING:
+                advance = (strcmp(datum->y.str, lastdatum->y.str) != 0);
+                break;
+        }
+        if(advance)
+        {
+            lastdatum = datum;
+        }
+        else
+        {
+            datum->deleted = 1;
+        }
+    }
+}
+
+static void _sample_data(struct data* data, double samplestart, double sampleinterval)
+{
+    // FIXME: assumes monotone data, implement check?
+    size_t sampleindex = 0;
+    for(size_t i = 0; i < data->length; ++i)
+    {
+        struct xydatum* datum = data->data + i;
+        if(datum->x < samplestart)
+        {
+            datum->deleted = 1;
+        }
+        else
+        {
+            size_t index = (datum->x - samplestart) / sampleinterval;
+            if(index > sampleindex)
+            {
+                sampleindex = index;
+            }
+            else
+            {
+                datum->deleted = 1;
+            }
+        }
+    }
 }
 
 int main(int argc, char** argv)
@@ -536,20 +720,45 @@ int main(int argc, char** argv)
         ++i;
     }
 
-    struct data* data = read_data(filename, xindex, yindex, separator, filterlist);
+    int xdecimals = _get_xdecimals(argc, argv);
+    int ydecimals = _get_ydecimals(argc, argv);
+
+    // read data
+    size_t skip = _get_skiplines(argc, argv);
+    struct data* data = read_data(filename, skip, xindex, yindex, separator, filterlist);
+    // FIXME: move filter out of data read-in? efficiency?
+
+    // sample data
+    if(_has_arg(argc, argv, NULL, "--sample"))
+    {
+        double samplestart = _get_sample_start(argc, argv);
+        double sampleinterval = _get_sample_interval(argc, argv);
+        _sample_data(data, samplestart, sampleinterval);
+    }
+
+    // post-process data
+    if(_has_arg(argc, argv, "-r", "--remove-redundant-points"))
+    {
+        _remove_redundant_points(data, xdecimals, ydecimals);
+    }
+
+    // print data
     for(size_t i = 0; i < data->length; ++i)
     {
-        switch((data->data + i)->y.type)
+        if(!(data->data + i)->deleted)
         {
-            case REAL:
-                printf("%f%s%f\n", (data->data + i)->x, print_separator, (data->data + i)->y.d);
-                break;
-            case INTEGER:
-                printf("%f%s%d\n", (data->data + i)->x, print_separator, (data->data + i)->y.i);
-                break;
-            case STRING:
-                printf("%f%s%s\n", (data->data + i)->x, print_separator, (data->data + i)->y.str);
-                break;
+            switch((data->data + i)->y.type)
+            {
+                case REAL:
+                    printf("%.*f%s%.*f\n", xdecimals, (data->data + i)->x, print_separator, ydecimals, (data->data + i)->y.d);
+                    break;
+                case INTEGER:
+                    printf("%.*f%s%d\n", xdecimals, (data->data + i)->x, print_separator, (data->data + i)->y.i);
+                    break;
+                case STRING:
+                    printf("%.*f%s%s\n", xdecimals, (data->data + i)->x, print_separator, (data->data + i)->y.str);
+                    break;
+            }
         }
     }
     free(data->data);
@@ -559,17 +768,4 @@ int main(int argc, char** argv)
     destroy_filterlist(filterlist);
     return 0;
 }
-
-/*
-        -f,--filter                          filter data (remove redundant points)
-        --as-string                          don't do any numerical processing on y
-        --digital                            interpret data as digital data, use with --threshold
-        --threshold (default 0.0)            threshold for digital data
-        --y-is-multibit                      map binary data (e.g. 101) to decimal (e.g. 5) (implies --as-string)
-        --ymin (default 0)                   minimum value for y map range 
-        --ymax (default 0)                   maximum value for y map range 
-        --xprecision (default 1e-3)          decimal digits for x data
-        --yprecision (default 1e-3)          decimal digits for y data
-        --x-relative                         output relative x values
-*/
 
