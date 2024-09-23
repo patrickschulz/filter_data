@@ -11,8 +11,8 @@ struct yvalue {
         const char* str;
     };
     enum {
-        DOUBLE,
-        INT,
+        REAL,
+        INTEGER,
         STRING
     } type;
 };
@@ -28,15 +28,18 @@ struct data {
     size_t capacity;
 };
 
+typedef int (*filter_func_0_arg)(struct xydatum*);
 typedef int (*filter_func_1_arg)(struct xydatum*, void*);
 typedef int (*filter_func_2_arg)(struct xydatum*, void*, void*);
 
 struct filter {
     union {
+        filter_func_0_arg func_0_arg;
         filter_func_1_arg func_1_arg;
         filter_func_2_arg func_2_arg;
     };
     enum {
+        FILTER_0_ARG,
         FILTER_1_ARG,
         FILTER_2_ARG
     } type;
@@ -49,7 +52,7 @@ struct filterlist {
     size_t size;
 };
 
-struct filterlist* create_filterlist(void)
+static struct filterlist* create_filterlist(void)
 {
     struct filterlist* list = malloc(sizeof(*list));
     list->filter = NULL;
@@ -57,10 +60,13 @@ struct filterlist* create_filterlist(void)
     return list;
 }
 
-void _destroy_filter(struct filter* filter)
+static void _destroy_filter(struct filter* filter)
 {
     switch(filter->type)
     {
+        case FILTER_0_ARG:
+            // nothing to do
+            break;
         case FILTER_1_ARG:
             free(filter->arg1);
             break;
@@ -72,7 +78,7 @@ void _destroy_filter(struct filter* filter)
     free(filter);
 }
 
-void destroy_filterlist(struct filterlist* filterlist)
+static void destroy_filterlist(struct filterlist* filterlist)
 {
     for(size_t i = 0; i < filterlist->size; ++i)
     {
@@ -82,10 +88,12 @@ void destroy_filterlist(struct filterlist* filterlist)
     free(filterlist);
 }
 
-int _apply_filter(struct xydatum* datum, struct filter* filter)
+static int _apply_filter(struct xydatum* datum, struct filter* filter)
 {
     switch(filter->type)
     {
+        case FILTER_0_ARG:
+            return filter->func_0_arg(datum);
         case FILTER_1_ARG:
             return filter->func_1_arg(datum, filter->arg1);
         case FILTER_2_ARG:
@@ -94,26 +102,54 @@ int _apply_filter(struct xydatum* datum, struct filter* filter)
     return 0;
 }
 
-static const char* _next_separator(const char* str, char separator, int* eol)
+static void _next_separator(const char* str, const char* separator, const char** startpos, const char** endpos, int* eol)
 {
     const char* pos = str;
     while(1)
     {
+        const char* seppos = separator;
         if((!*pos) || (*pos == '\n'))
         {
             *eol = 1;
             break;
         }
-        if(*pos == separator)
+        while(*pos && *seppos && (*pos == *seppos))
         {
+            *startpos = pos;
+            ++pos;
+            ++seppos;
+        }
+        if(!*seppos)
+        {
+            if(!*pos)
+            {
+                *eol = 1;
+            }
             break;
         }
         ++pos;
     }
-    return pos;
+    *endpos = pos - 1;
 }
 
-struct data* read_data(const char* filename, unsigned int xindex, unsigned int yindex, char separator, struct filterlist* filterlist)
+static double _str_to_number(const char* str, const char* endptr)
+{
+    char* tmp = malloc(endptr - str + 1);
+    const char* ptr = str;
+    char* tptr = tmp;
+    while(ptr != endptr)
+    {
+        *tptr = *ptr;
+        ++ptr;
+        ++tptr;
+    }
+    *tptr = 0;
+    double num = atof(tmp);
+    free(tmp);
+    return num;
+}
+
+static struct data* read_data(const char* filename, unsigned int xindex, unsigned int yindex, const char* separator, struct filterlist* filterlist)
 {
     FILE* file = fopen(filename, "r");
     if(!file)
@@ -145,15 +181,17 @@ struct data* read_data(const char* filename, unsigned int xindex, unsigned int y
         while(1) /* parse line */
         {
             int eol = 0;
-            const char* pos = _next_separator(str, separator, &eol);
+            const char* startpos;
+            const char* endpos;
+            _next_separator(str, separator, &startpos, &endpos, &eol);
             if(index == xindex)
             {
-                datum->x = atof(str);
+                datum->x = _str_to_number(str, startpos);
             }
             if(index == yindex)
             {
-                datum->y.d = atof(str);
-                datum->y.type = DOUBLE;
+                datum->y.d = _str_to_number(str, startpos);
+                datum->y.type = REAL;
             }
             if(eol)
             {
@@ -163,7 +201,7 @@ struct data* read_data(const char* filename, unsigned int xindex, unsigned int y
                 }
                 break;
             }
-            str = pos + 1;
+            str = endpos + 1;
             ++index;
         }
         if(advance)
@@ -175,19 +213,19 @@ struct data* read_data(const char* filename, unsigned int xindex, unsigned int y
     return data;
 }
 
-int _scale_x(struct xydatum* datum, void* factor)
+static int _scale_x(struct xydatum* datum, void* factor)
 {
     datum->x *= *((double*)factor);
     return 1;
 }
 
-int _scale_y(struct xydatum* datum, void* factor)
+static int _scale_y(struct xydatum* datum, void* factor)
 {
     datum->y.d *= *((double*)factor);
     return 1;
 }
 
-int _x_min(struct xydatum* datum, void* min)
+static int _x_min(struct xydatum* datum, void* min)
 {
     if(datum->x < *((double*)min))
     {
@@ -199,7 +237,7 @@ int _x_min(struct xydatum* datum, void* min)
     }
 }
 
-int _x_max(struct xydatum* datum, void* min)
+static int _x_max(struct xydatum* datum, void* min)
 {
     if(datum->x > *((double*)min))
     {
@@ -211,19 +249,26 @@ int _x_max(struct xydatum* datum, void* min)
     }
 }
 
-int _shift_x(struct xydatum* datum, void* shift)
+static int _shift_x(struct xydatum* datum, void* shift)
 {
     datum->x += *((double*)shift);
     return 1;
 }
 
-int _shift_y(struct xydatum* datum, void* shift)
+static int _shift_y(struct xydatum* datum, void* shift)
 {
     datum->y.d += *((double*)shift);
     return 1;
 }
 
-int _every_nth(struct xydatum* datum, void* nthp, void* countv)
+static int _y_is_integer(struct xydatum* datum)
+{
+    datum->y.i += (int) datum->y.d;
+    datum->y.type = INTEGER;
+    return 1;
+}
+
+static int _every_nth(struct xydatum* datum, void* nthp, void* countv)
 {
     (void)datum;
     int nth = *((int*)nthp);
@@ -245,7 +290,15 @@ int _every_nth(struct xydatum* datum, void* nthp, void* countv)
     return ret;
 }
 
-struct filter* _create_filter_1_arg(filter_func_1_arg func, void* arg)
+static struct filter* _create_filter_0_arg(filter_func_0_arg func)
+{
+    struct filter* filter = malloc(sizeof(*filter));
+    filter->func_0_arg = func;
+    filter->type = FILTER_0_ARG;
+    return filter;
+}
+
+static struct filter* _create_filter_1_arg(filter_func_1_arg func, void* arg)
 {
     struct filter* filter = malloc(sizeof(*filter));
     filter->func_1_arg = func;
@@ -254,7 +307,7 @@ struct filter* _create_filter_1_arg(filter_func_1_arg func, void* arg)
     return filter;
 }
 
-struct filter* _create_filter_2_arg(filter_func_2_arg func, void* arg1, void* arg2)
+static struct filter* _create_filter_2_arg(filter_func_2_arg func, void* arg1, void* arg2)
 {
     struct filter* filter = malloc(sizeof(*filter));
     filter->func_2_arg = func;
@@ -264,15 +317,90 @@ struct filter* _create_filter_2_arg(filter_func_2_arg func, void* arg1, void* ar
     return filter;
 }
 
-void _append_filter(struct filterlist* filterlist, struct filter* filter)
+static void _append_filter(struct filterlist* filterlist, struct filter* filter)
 {
     filterlist->filter = realloc(filterlist->filter, (filterlist->size + 1) * sizeof(*filterlist->filter));
     filterlist->filter[filterlist->size] = filter;
     ++filterlist->size;
 }
 
+static void _usage(void)
+{
+    puts("Filter simulation data");
+    puts("    <filename> (string)                  filename of data");
+    puts("    <xindex> (number)                    index of x data");
+    puts("    <yindex> (number)                    index if y data");
+    puts("    --y-is-integer                       y values are integers, not real numbers");
+    //puts("    -s,--separator (default \",\")         input data separator");
+    //puts("    -S,--print-separator (default \" \")   output data separator");
+    //puts("    -f,--filter                          filter data (remove redundant points)");
+    //puts("    -n,--every-nth (default 1)           only keep every nth point");
+    //puts("    --as-string                          don't do any numerical processing on y");
+    //puts("    --digital                            interpret data as digital data, use with --threshold");
+    //puts("    --threshold (default 0.0)            threshold for digital data");
+    //puts("    --xstart (default -1e32)             minimum x datum");
+    //puts("    --xend (default 1e32)                maximum x datum");
+    //puts("    --xscale (default 1)                 factor for scaling x data");
+    //puts("    --yscale (default 1)                 factor for scaling y data");
+    //puts("    --y-is-multibit                      map binary data (e.g. 101) to decimal (e.g. 5) (implies --as-string)");
+    //puts("    --ymin (default 0)                   minimum value for y map range");
+    //puts("    --ymax (default 0)                   maximum value for y map range");
+    //puts("    --xprecision (default 1e-3)          decimal digits for x data");
+    //puts("    --yprecision (default 1e-3)          decimal digits for y data");
+    //puts("    --xshift (default 0)                 shift x values");
+    //puts("    --x-relative                         output relative x values");
+}
+
+static int _arg_is(const char* arg, const char* short_arg, const char* long_arg)
+{
+    if(short_arg && strcmp(arg, short_arg) == 0)
+    {
+        return 1;
+    }
+    if(long_arg && strcmp(arg, long_arg) == 0)
+    {
+        return 1;
+    }
+    return 0;
+}
+
+static char* _get_separator(int argc, char** argv, const char* default_sep)
+{
+    for(int i = 1; i < argc; ++i)
+    {
+        if(_arg_is(argv[i], "-s", "--separator"))
+        {
+            if(i < argc - 1)
+            {
+                return strdup(argv[i + 1]);
+            }
+        }
+    }
+    return strdup(default_sep);
+}
+
+static char* _get_print_separator(int argc, char** argv, const char* default_sep)
+{
+    for(int i = 1; i < argc; ++i)
+    {
+        if(_arg_is(argv[i], "-S", "--print-separator"))
+        {
+            if(i < argc - 1)
+            {
+                return strdup(argv[i + 1]);
+            }
+        }
+    }
+    return strdup(default_sep);
+}
+
 int main(int argc, char** argv)
 {
+    if((argc == 2) && ((strcmp(argv[1], "-h") == 0) || (strcmp(argv[1], "--help") == 0)))
+    {
+        _usage();
+        return 0;
+    }
     if(argc < 2)
     {
         fputs("filter_data: no filename given\n", stderr);
@@ -294,8 +422,8 @@ int main(int argc, char** argv)
 
     struct filterlist* filterlist = create_filterlist();
 
-    char separator = ',';
-    char* print_separator = strdup(",");
+    char* separator = _get_separator(argc, argv, ",");
+    char* print_separator = _get_print_separator(argc, argv, " ");
 
     int i = 4;
     while(i < argc)
@@ -313,7 +441,7 @@ int main(int argc, char** argv)
             _append_filter(filterlist, filter);
             ++i;
         }
-        if(strcmp(argv[i], "--yscale") == 0)
+        else if(strcmp(argv[i], "--yscale") == 0)
         {
             if(i + 1 >= argc)
             {
@@ -326,7 +454,7 @@ int main(int argc, char** argv)
             _append_filter(filterlist, filter);
             ++i;
         }
-        if(strcmp(argv[i], "--xmin") == 0)
+        else if(strcmp(argv[i], "--xmin") == 0)
         {
             if(i + 1 >= argc)
             {
@@ -339,7 +467,7 @@ int main(int argc, char** argv)
             _append_filter(filterlist, filter);
             ++i;
         }
-        if(strcmp(argv[i], "--xmax") == 0)
+        else if(strcmp(argv[i], "--xmax") == 0)
         {
             if(i + 1 >= argc)
             {
@@ -352,7 +480,7 @@ int main(int argc, char** argv)
             _append_filter(filterlist, filter);
             ++i;
         }
-        if(strcmp(argv[i], "--xshift") == 0)
+        else if(strcmp(argv[i], "--xshift") == 0)
         {
             if(i + 1 >= argc)
             {
@@ -365,7 +493,7 @@ int main(int argc, char** argv)
             _append_filter(filterlist, filter);
             ++i;
         }
-        if(strcmp(argv[i], "--yshift") == 0)
+        else if(strcmp(argv[i], "--yshift") == 0)
         {
             if(i + 1 >= argc)
             {
@@ -378,7 +506,12 @@ int main(int argc, char** argv)
             _append_filter(filterlist, filter);
             ++i;
         }
-        if(strcmp(argv[i], "--every-nth") == 0)
+        else if(strcmp(argv[i], "--y-is-integer") == 0)
+        {
+            struct filter* filter = _create_filter_0_arg(_y_is_integer);
+            _append_filter(filterlist, filter);
+        }
+        else if(strcmp(argv[i], "--every-nth") == 0)
         {
             if(i + 1 >= argc)
             {
@@ -393,44 +526,41 @@ int main(int argc, char** argv)
             _append_filter(filterlist, filter);
             ++i;
         }
-        if(strcmp(argv[i], "--separator") == 0)
+        /*
+        else
         {
-            if(i + 1 >= argc)
-            {
-                fprintf(stderr, "%s\n", "--separator: argument required");
-                return 0;
-            }
-            separator = argv[i + 1][0];
-            ++i;
+            fprintf(stderr, "unknown option: '%s'\n", argv[i]);
+            return 1;
         }
-        if(strcmp(argv[i], "--print-separator") == 0)
-        {
-            if(i + 1 >= argc)
-            {
-                fprintf(stderr, "%s\n", "--print-separator: argument required");
-                return 0;
-            }
-            free(print_separator);
-            print_separator = strdup(argv[i + 1]);
-            ++i;
-        }
+        */
         ++i;
     }
 
     struct data* data = read_data(filename, xindex, yindex, separator, filterlist);
     for(size_t i = 0; i < data->length; ++i)
     {
-        printf("%f%s%f\n", (data->data + i)->x, print_separator, (data->data + i)->y.d);
+        switch((data->data + i)->y.type)
+        {
+            case REAL:
+                printf("%f%s%f\n", (data->data + i)->x, print_separator, (data->data + i)->y.d);
+                break;
+            case INTEGER:
+                printf("%f%s%d\n", (data->data + i)->x, print_separator, (data->data + i)->y.i);
+                break;
+            case STRING:
+                printf("%f%s%s\n", (data->data + i)->x, print_separator, (data->data + i)->y.str);
+                break;
+        }
     }
     free(data->data);
     free(data);
+    free(separator);
     free(print_separator);
     destroy_filterlist(filterlist);
     return 0;
 }
 
 /*
-        -r,--reduce (default 0)              reduce number of points to this value (if > 0)
         -f,--filter                          filter data (remove redundant points)
         --as-string                          don't do any numerical processing on y
         --digital                            interpret data as digital data, use with --threshold
@@ -442,3 +572,4 @@ int main(int argc, char** argv)
         --yprecision (default 1e-3)          decimal digits for y data
         --x-relative                         output relative x values
 */
+
